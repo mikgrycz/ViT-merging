@@ -21,9 +21,9 @@ def train(model, dataloader, optimizer, criterion, scaler=None):
         images, labels = images.to(device, dtype=torch.float32), labels.to(device)
 
         optimizer.zero_grad()
-        # with torch.autocast(device_type="mps", dtype=torch.float32):
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        with torch.cuda.amp.autocast():
+            outputs = model(images)
+            loss = criterion(outputs, labels)
 
         # Scale loss if scaler is provided
         if scaler is not None:
