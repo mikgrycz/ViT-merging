@@ -13,7 +13,6 @@ import torch.nn.init as init
 import os
 
 
-
 class PatchEmbed(nn.Module):
     def __init__(self, img_size, patch_size, stride, in_chans=3, embed_dim=48):
         super().__init__()
@@ -119,19 +118,28 @@ class VisionTransformer(nn.Module):
         return self.head(self.norm(x[:, 0]))
 
 
-def train(model, dataloader, optimizer, criterion):
+def train(model, dataloader, optimizer, criterion, scaler=None):
     model.train()
     running_loss = 0.0
     correct_predictions, total_samples = 0, 0
     for batch_idx, (images, labels) in enumerate(dataloader):
         # Move data to device
-        images, labels = images.to(device), labels.to(device)
+        images, labels = images.to(device, dtype=torch.float32), labels.to(device)
 
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        with torch.autocast(device_type="mps", dtype=torch.float32):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+        # Scale loss if scaler is provided
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # Regular backward pass
+            loss.backward()
+            optimizer.step()
 
         # Update running loss
         running_loss += loss.item() * images.size(0)
@@ -159,7 +167,7 @@ def evaluate(model, dataloader):
     with torch.no_grad():
         for batch_idx, (images, labels) in enumerate(dataloader):
             # Move data to device
-            images, labels = images.to(device), labels.to(device)
+            images, labels = images.to(device, dtype=torch.float32), labels.to(device)
 
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -186,6 +194,7 @@ def xavier_init(model):
             init.xavier_uniform_(module.weight)
             if module.bias is not None:
                 init.constant_(module.bias, 0)
+
 
 if __name__ == "__main__":
 
@@ -224,20 +233,21 @@ if __name__ == "__main__":
         "checkpoint_every_num_epochs": 10,
     }
 
-    wandb.init(entity="mikolajgrycz-mikorg", project="fsk", config=config, name=f"ViT Training from scratch weight decay={config['weight_decay']}, without dropout in vit, change transform, no timm")
+    wandb.init(entity="mikolajgrycz-mikorg", project="fsk", config=config,
+               name=f"ViT Training from scratch weight decay={config['weight_decay']}, without dropout in vit, change transform, no timm, with scaler and scheduler")
 
     transform_train = transforms.Compose([
         transforms.RandomCrop(config["img_size"], padding=4),
         transforms.Resize(config["transforms"]["resize"]),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize(config["transforms"]["normalize"]["mean"], config["transforms"]["normalize"]["std"]),
     ])
 
     transform_test = transforms.Compose([
         transforms.Resize(config["transforms"]["resize"]),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize(config["transforms"]["normalize"]["mean"], config["transforms"]["normalize"]["std"]),
     ])
     train_dataset = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
     test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform_test, download=True)
@@ -255,17 +265,22 @@ if __name__ == "__main__":
     criterion = config["loss_func"]
 
     num_epochs = config["num_epochs"]
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_epochs)
+
+    scaler = torch.amp.GradScaler(device=config["device"])
+
     checkpoint_every_num_epochs = config["checkpoint_every_num_epochs"]
     checkpoint_dir = Path('checkpoints')
     checkpoint_dir.mkdir(exist_ok=True)
 
     for epoch in range(1, num_epochs + 1):
-        train_loss, train_accuracy = train(model, train_loader, optimizer, criterion)
+        train_loss, train_accuracy = train(model, train_loader, optimizer, criterion, scaler=scaler)
         test_loss, test_accuracy = evaluate(model, test_loader)
+        scheduler.step(epoch - 1)
         print(
             f"Epoch [{epoch}/{num_epochs}], Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%, Test Loss: {test_loss:.4f} Test Accuracy: {test_accuracy:.2f}%")
         wandb.log({"epoch": epoch, "train_loss": train_loss, "train_accuracy": train_accuracy, "test_loss": test_loss,
-                   "test_accuracy": test_accuracy})
+                   "test_accuracy": test_accuracy, "lr": optimizer.param_groups[0]["lr"]})
         if epoch % checkpoint_every_num_epochs == 0:
             torch.save(model.state_dict(), checkpoint_dir / f'vit-regular-{epoch}-epoch.pth')
 
