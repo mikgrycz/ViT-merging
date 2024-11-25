@@ -14,7 +14,7 @@ import os
 
 
 class PatchEmbed(nn.Module):
-    def __init__(self, img_size, patch_size, stride, in_chans=3, embed_dim=48):
+    def __init__(self, img_size, patch_size, stride, in_chans=3, embed_dim=128):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
