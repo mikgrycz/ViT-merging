@@ -90,6 +90,7 @@ class Block(nn.Module):
 
 
 class VisionTransformer(nn.Module):
+
     def __init__(self, img_size=32, patch_size=4, stride=4, in_chans=3, n_classes=10, embed_dim=256, depth=8, n_heads=6,
                  mlp_ratio=4., qkv_bias=True, p=0., attn_p=0.):
         super().__init__()
@@ -153,6 +154,7 @@ def train(model, dataloader, optimizer, criterion, scaler=None):
             print(
                 f"Batch [{batch_idx + 1}/{len(dataloader)}], Loss: {loss.item():.4f}, Accuracy: {100 * correct_predictions / total_samples:.2f}")
 
+
     epoch_loss = running_loss / len(dataloader.dataset)
     epoch_accuracy = 100 * correct_predictions / total_samples
     print(f"Epoch Loss: {epoch_loss:.4f}, Epoch Accuracy: {epoch_accuracy:.4f}")
@@ -179,6 +181,7 @@ def evaluate(model, dataloader):
 
             # Print progress every 10 batches
             if (batch_idx + 1) % 10 == 0:
+
                 print(
                     f"Evaluation Batch [{batch_idx + 1}/{len(dataloader)}], Loss: {loss.item():.4f}, Accuracy: {100 * correct_predictions / total_samples:.2f}")
 
@@ -196,10 +199,11 @@ def xavier_init(model):
                 init.constant_(module.bias, 0)
 
 
-if __name__ == "__main__":
+               
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+if __name__ == "__main__":
+  
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.mps.is_available() else "cpu")
     print(f"Using device: {device}")
 
     config = {
@@ -248,6 +252,7 @@ if __name__ == "__main__":
         transforms.Resize(config["transforms"]["resize"]),
         transforms.ToTensor(),
         transforms.Normalize(config["transforms"]["normalize"]["mean"], config["transforms"]["normalize"]["std"]),
+
     ])
     train_dataset = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
     test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform_test, download=True)
@@ -267,7 +272,18 @@ if __name__ == "__main__":
     num_epochs = config["num_epochs"]
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_epochs)
 
+
     scaler = torch.amp.GradScaler(device=config["device"])
+
+
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=config["num_workers"])
+    test_loader = DataLoader(test_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=config["num_workers"])
+    model = VisionTransformer(img_size=config["img_size"], patch_size=config["patch_size"], stride=config["stride"], n_classes=config["n_classes"], embed_dim=config["embed_dim"], depth=config["depth"], n_heads=config["n_heads"]).to(device)
+
+    optimizer = optim.Adam(model.parameters(), lr=config["lr"], betas=config["betas"], eps=config["eps"], weight_decay=config["weight_decay"])
+    criterion = config["loss_func"]
+
+    num_epochs = config["num_epochs"]
 
     checkpoint_every_num_epochs = config["checkpoint_every_num_epochs"]
     checkpoint_dir = Path('checkpoints')
@@ -285,6 +301,7 @@ if __name__ == "__main__":
             torch.save(model.state_dict(), checkpoint_dir / f'vit-regular-{epoch}-epoch.pth')
 
     model.load_state_dict(torch.load(checkpoint_dir / f'vit-regular-{num_epochs}-epoch.pth'))
+
     model.eval()
 
     img, label = test_dataset[0]
