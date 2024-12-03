@@ -3,10 +3,13 @@ from torch import nn, load
 from torch.nn import KLDivLoss
 from torchvision import transforms
 from tqdm import tqdm
+import wandb
 
 from datasets.cars import PytorchStanfordCars, Cars
 from src.task_vectors import TaskVector
 
+# Initialize wandb
+wandb.init(project="test-time-merging")
 
 def freeze_all_but_last_layers(model: nn.Module, n_layers: int = 1):
     for param in model.parameters():
@@ -19,28 +22,10 @@ def freeze_all_but_last_layers(model: nn.Module, n_layers: int = 1):
 
     return model
 
-
 def freeze(model: nn.Module):
     for param in model.parameters():
         param.requires_grad = False
     return model
-
-
-# TODO: probably not needed
-# class TestTimeMerging(nn.Module):
-#     def __init__(self, pretrained_model, finetuned_model, merged_model, last_layers_update: int = 1):
-#         super(TestTimeMerging, self).__init__()
-#         self.pretrained_model = freeze(pretrained_model)
-#         self.finetuned_model = freeze(finetuned_model)
-#         self.merged_model = freeze_all_but_last_layers(merged_model, n_layers=last_layers_update)
-#         self.last_layers_update = last_layers_update
-#
-#     def forward(self, x):
-#         x_pretrained = self.pretrained_model(x)
-#         x_finetuned = self.finetuned_model(x)
-#         x_merged = self.merged_model(x)
-#         return x_pretrained, x_finetuned, x_merged
-
 
 def resolve_gradients(grad_loss_p_m, grad_loss_f_m):
     if grad_loss_p_m.shape != grad_loss_f_m.shape:
@@ -57,13 +42,6 @@ def resolve_gradients(grad_loss_p_m, grad_loss_f_m):
     result[mask_same_signs] = (grad_loss_p_m[mask_same_signs] + grad_loss_f_m[mask_same_signs]) / 2
 
     return result
-
-
-
-
-
-
-
 
 def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations, device):
     model_m.train()
@@ -84,39 +62,60 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
                 merged_output = model_m(images)
                 loss_p_m = criterion_p_m(merged_output, pretrained_output)
                 loss_p_m.backward(retain_graph=True)
-                # TODO: hardcoded last layer of Transformer
-                # TODO: fix gradient operations (maybe have to work directly on .parameters())
                 grads_loss_p_m = model_m.model.visual.transformer.resblocks[-1].grad.clone()
 
                 optimizer.zero_grad()
                 finetuned_output = model_f(images).detach()
                 loss_f_m = criterion_f_m(merged_output, finetuned_output)
                 loss_f_m.backward(retain_graph=True)
-                # TODO: hardcoded last layer of Transformer
                 grad_loss_f_m = model_m.model.visual.transformer.resblocks[-1].grad.clone()
 
                 resolved_gradients = resolve_gradients(grads_loss_p_m, grad_loss_f_m)
-                # optimizer.zero_grad()
                 model_m.model.visual.transformer.resblocks[-1].grad = resolved_gradients
 
                 optimizer.step()
 
-                # running_loss += loss.item()
-                #
-                # _, predicted = torch.max(outputs, 1)
-                # total += labels.size(0)
-                # correct += (predicted == labels).sum().item()
-
+                # Log metrics to wandb
+                wandb.log({"epoch": epoch + 1, "iteration": i + 1, "loss_p_m": loss_p_m.item(), "loss_f_m": loss_f_m.item()})
 
     return model_p, model_m, model_f
 
+def resolve_gradients_with_weights(grad_p, grad_f, weight_p=0.5, weight_f=0.5):
+    if grad_p.shape != grad_f.shape:
+        raise ValueError("Gradients must have the same shape")
+    
+    resolved_grad = torch.empty_like(grad_p)
+    
+    # weighted average
+    mask_diff_signs = (grad_p * grad_f) < 0
+    resolved_grad[mask_diff_signs] = torch.max(weight_p * grad_p[mask_diff_signs], weight_f * grad_f[mask_diff_signs])
+    resolved_grad[~mask_diff_signs] = (weight_p * grad_p[~mask_diff_signs] + weight_f * grad_f[~mask_diff_signs])
+    
+    return resolved_grad
 
+def freeze_layers(model: nn.Module, unfreeze_layers: list[int]):
+    for idx, block in enumerate(model.model.visual.transformer.resblocks):
+        for param in block.parameters():
+            param.requires_grad = idx in unfreeze_layers
+    return model
 
+def evaluate(model, dataloader, device):
+    model.eval()
+    total_correct = 0
+    total_samples = 0
+    with torch.no_grad():
+        for images, labels in dataloader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, preds = torch.max(outputs, 1)
+            total_correct += (preds == labels).sum().item()
+            total_samples += labels.size(0)
+    accuracy = total_correct / total_samples
+    return accuracy
 
 if __name__ == "__main__":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # TODO: figure out if we can overcome specific resize dims
     transform = transforms.Compose([transforms.ToTensor(), transforms.Resize((240,240))])
     cars = Cars(preprocess=transform, location="data", batch_size=512)
     test_loader = cars.test_loader
@@ -126,20 +125,9 @@ if __name__ == "__main__":
 
     task_vector = TaskVector(pretrained_path, finetuned_path)
     merged = freeze_all_but_last_layers(task_vector.apply_to(pretrained_path, scaling_coef=0.5))
-    # print(merged.model.visual.transformer.resblocks[-1].requires_grad)
     pretrained = freeze(torch.load(pretrained_path))
     finetuned = freeze(torch.load(finetuned_path))
 
-    # test_time_merging_model = TestTimeMerging(torch.load(pretrained_path), torch.load(finetuned_path), merged)
     optimizer = torch.optim.Adam(merged.model.visual.transformer.resblocks[-1].parameters(), lr=1e-3)
     p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, 10, 10, DEVICE)
     torch.save(m.merged_model.state_dict(), "checkpoints/first_try.pth")
-
-
-
-
-    # # for block in model.model.visual.transformer.resblocks:
-    # #     print(block)
-    # #     break
-    #
-    # print(model.model.visual.transformer.resblocks[-1])
