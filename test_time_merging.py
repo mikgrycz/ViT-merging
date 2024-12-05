@@ -8,12 +8,26 @@ from datasets.cars import Cars
 from src.task_vectors import TaskVector
 
 
+
+class CombinedModel(nn.Module):
+    def __init__(self, base_model, classification_head):
+        super(CombinedModel, self).__init__()
+        self.base_model = base_model
+        self.classification_head = classification_head
+
+    def forward(self, x):
+        features = self.base_model(x)  # Extract features from the base model
+        logits = self.classification_head(features)  # Pass through the classification head
+        return logits
+
+
+
 def freeze_all_but_last_layers(model: nn.Module, n_layers: int = 1):
     for param in model.parameters():
         param.requires_grad = False
 
     for i in range(1, n_layers + 1):
-        for pr in model.model.visual.transformer.resblocks[-i].parameters():
+        for pr in model.base_model.model.visual.transformer.resblocks[-i].parameters():
             pr.requires_grad = True
 
     return model
@@ -58,13 +72,16 @@ def resolve_gradients(list_grad_loss_p_m, list_grad_loss_f_m):
 def log_accuracy(iteration, labels, merged_output, finetuned_output, pretrained_output):
     _, predicted_merged = torch.max(merged_output, 1)
     correct_preds_merged = (predicted_merged == labels).sum().item()
-    _, predicted_finetuned = torch.max(finetuned_output, 1)
-    correct_preds_finetuned = (predicted_finetuned == labels).sum().item()
-    _, predicted_pretrained = torch.max(pretrained_output, 1)
-    correct_preds_pretrained = (predicted_pretrained == labels).sum().item()
     print(f"[MERGED] Correct predictions in iteration {iteration + 1}: {correct_preds_merged}/{labels.size(0)}")
-    print(f"[FINETUNED] Correct predictions in iteration {iteration + 1}: {correct_preds_finetuned}/{labels.size(0)}")
-    print(f"[PRETRAINED] Correct predictions in iteration {iteration + 1}: {correct_preds_pretrained}/{labels.size(0)}")
+
+    # these are frozen so just plot them once
+    if iteration == 0:
+        _, predicted_finetuned = torch.max(finetuned_output, 1)
+        correct_preds_finetuned = (predicted_finetuned == labels).sum().item()
+        _, predicted_pretrained = torch.max(pretrained_output, 1)
+        correct_preds_pretrained = (predicted_pretrained == labels).sum().item()
+        print(f"[FINETUNED] Correct predictions in iteration {iteration + 1}: {correct_preds_finetuned}/{labels.size(0)}")
+        print(f"[PRETRAINED] Correct predictions in iteration {iteration + 1}: {correct_preds_pretrained}/{labels.size(0)}")
 
 
 def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations, device):
@@ -87,7 +104,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
                 loss_p_m = criterion_p_m(merged_output, pretrained_output)
                 loss_p_m.backward(retain_graph=True)
                 # TODO: hardcoded last layer of Transformer
-                merged_model_last_resblock = model_m.model.visual.transformer.resblocks[-1]
+                merged_model_last_resblock = model_m.base_model.model.visual.transformer.resblocks[-1]
                 p_m_grads = []
                 for param in merged_model_last_resblock.parameters():
                     p_m_grads.append(param.grad)
@@ -132,12 +149,20 @@ if __name__ == "__main__":
 
     pretrained_path = "checkpoints/ViT-B-32/zeroshot.pt"
     finetuned_path = "checkpoints/ViT-B-32/Cars/finetuned.pt"
+    cars_head_path = "checkpoints/ViT-B-32/head_Cars.pt"
+
+    pretrained_backbone = torch.load(pretrained_path)
+    finetuned_backbone = torch.load(finetuned_path)
 
     task_vector = TaskVector(pretrained_path, finetuned_path)
-    merged = freeze_all_but_last_layers(task_vector.apply_to(pretrained_path, scaling_coef=0.5))
-    pretrained = freeze(torch.load(pretrained_path))
-    finetuned = freeze(torch.load(finetuned_path))
+    merged_backbone = task_vector.apply_to(pretrained_path, scaling_coef=0.5)
 
-    optimizer = torch.optim.Adam(merged.model.visual.transformer.resblocks[-1].parameters(), lr=1e-3)
+    cars_classification_head = torch.load(cars_head_path)
+    pretrained = freeze(CombinedModel(pretrained_backbone, cars_classification_head))
+    finetuned = freeze(CombinedModel(finetuned_backbone, cars_classification_head))
+    merged = freeze_all_but_last_layers(CombinedModel(merged_backbone, cars_classification_head))
+
+
+    optimizer = torch.optim.Adam(merged.base_model.model.visual.transformer.resblocks[-1].parameters(), lr=1e-3)
     p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, 10, 10, DEVICE)
     torch.save(m.merged_model.state_dict(), "checkpoints/first_try.pth")
