@@ -43,7 +43,7 @@ def resolve_gradients(list_grad_loss_p_m, list_grad_loss_f_m):
         raise ValueError("Lists of tensors must have the same length")
 
     result_param_list = []
-    for t in range(len(list_grad_loss_p_m)):
+    for t in range(11, len(list_grad_loss_p_m)):
         grad_loss_p_m = list_grad_loss_p_m[t]
         grad_loss_f_m = list_grad_loss_f_m[t]
         if grad_loss_p_m.shape != grad_loss_f_m.shape:
@@ -108,6 +108,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
                 loss_p_m.backward(retain_graph=True)
                 # TODO: hardcoded last layer of Transformer
                 merged_model_last_resblock = model_m.base_model.model.visual.transformer.resblocks[-1]
+                # print(list(merged_model_last_resblock.parameters()))
                 p_m_grads = []
                 for param in merged_model_last_resblock.parameters():
                     p_m_grads.append(param.grad)
@@ -123,9 +124,13 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
 
                 optimizer.zero_grad()
                 resolved_gradients = resolve_gradients(p_m_grads, f_m_grads)
-                for idx, param in enumerate(merged_model_last_resblock.parameters()):
-                    param.grad = resolved_gradients[idx]
-
+                print(len(resolved_gradients[0]))
+                print("---------")
+                print(len(list(merged_model_last_resblock.parameters())[11]))
+                # for idx, param in enumerate(list(merged_model_last_resblock.parameters())[11]):
+                #     print(idx)
+                #     param.grad = resolved_gradients[idx]
+                list(merged_model_last_resblock.parameters())[11].grad = resolved_gradients[0]
                 optimizer.step()
 
                 log_accuracy(i, labels, merged_output, finetuned_output, pretrained_output)
