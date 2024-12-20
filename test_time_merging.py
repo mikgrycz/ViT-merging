@@ -96,11 +96,12 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
         correct = 0
         total = 0
         print(f"Epoch {epoch + 1}/{epochs}")
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_iterations)
         for images, labels in tqdm(dataloader):
             images, labels = images.to(device), labels.to(device)
             for i in range(n_iterations):
                 optimizer.zero_grad()
-
+                scheduler.step(i)
                 pretrained_output = model_p(images).detach()
                 merged_output = model_m(images)
 
