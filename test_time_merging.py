@@ -11,6 +11,9 @@ from datasets.cars import Cars
 from src.task_vectors import TaskVector
 import wandb
 
+from datasets.single_category_loader import create_dataloader
+
+
 class CombinedModel(nn.Module):
     def __init__(self, base_model, classification_head):
         super(CombinedModel, self).__init__()
@@ -100,6 +103,10 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_iterations)
         for images, labels in tqdm(dataloader):
             images, labels = images.to(device), labels.to(device)
+            
+            # Ensure all labels in the batch are the same
+            assert len(labels.unique()) == 1, f"Batch contains multiple categories: {labels.unique()}"
+
             for i in range(n_iterations):
                 optimizer.zero_grad()
                 scheduler.step(i)
@@ -108,34 +115,24 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
 
                 loss_p_m = criterion_p_m(merged_output, pretrained_output)
                 loss_p_m.backward(retain_graph=True)
-                # TODO: hardcoded last layer of Transformer
+
                 merged_model_last_resblock = model_m.base_model.model.visual.transformer.resblocks[-1]
-                # print(list(merged_model_last_resblock.parameters()))
-                p_m_grads = []
-                for param in merged_model_last_resblock.parameters():
-                    p_m_grads.append(param.grad)
+                p_m_grads = [param.grad for param in merged_model_last_resblock.parameters()]
 
                 optimizer.zero_grad()
                 finetuned_output = model_f(images).detach()
                 loss_f_m = criterion_f_m(merged_output, finetuned_output)
                 loss_f_m.backward(retain_graph=True)
-                # TODO: hardcoded last layer of Transformer
-                f_m_grads = []
-                for param in merged_model_last_resblock.parameters():
-                    f_m_grads.append(param.grad)
+
+                f_m_grads = [param.grad for param in merged_model_last_resblock.parameters()]
 
                 optimizer.zero_grad()
                 resolved_gradients = resolve_gradients(p_m_grads, f_m_grads)
-                print(len(resolved_gradients[0]))
-                print("---------")
-                print(len(list(merged_model_last_resblock.parameters())[11]))
-                # for idx, param in enumerate(list(merged_model_last_resblock.parameters())[11]):
-                #     print(idx)
-                #     param.grad = resolved_gradients[idx]
                 list(merged_model_last_resblock.parameters())[11].grad = resolved_gradients[0]
                 optimizer.step()
 
                 log_accuracy(i, labels, merged_output, finetuned_output, pretrained_output)
+
 
 
             _, predicted = torch.max(merged_output, 1)

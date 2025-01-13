@@ -11,6 +11,7 @@ from PIL import Image
 from torchvision.datasets.utils import download_and_extract_archive, download_url, verify_str_arg
 from torchvision.datasets.vision import VisionDataset
 
+from datasets.single_category_loader import create_dataloader
 
 class PytorchStanfordCars(VisionDataset):
     """`Stanford Cars <https://ai.stanford.edu/~jkrause/cars/car_dataset.html>`_ Dataset
@@ -51,15 +52,15 @@ class PytorchStanfordCars(VisionDataset):
         super().__init__(root, transform=transform, target_transform=target_transform)
 
         self._split = verify_str_arg(split, "split", ("train", "test"))
-        self._base_folder = pathlib.Path(root) / "stanford_cars"
-        devkit = self._base_folder / "devkit"
+        self._base_folder = "/mnt/c/users/mikol/Desktop/informatyka_2021/sem7/gmum_projekt/ViT-merging/data/stanford_cars_by_classes"
+        devkit = self._base_folder + "/devkit"
 
         if self._split == "train":
-            self._annotations_mat_path = devkit / "cars_train_annos.mat"
-            self._images_base_path = self._base_folder / "cars_train"
+            self._annotations_mat_path = devkit + "/cars_train_annos.mat"
+            self._images_base_path = self._base_folder + "/cars_train"
         else:
-            self._annotations_mat_path = devkit / "cars_test_annos_withlabels.mat"
-            self._images_base_path = self._base_folder / "cars_test"
+            self._annotations_mat_path = devkit + "/cars_test_annos_withlabels.mat"
+            self._images_base_path = self._base_folder + "/cars_test"
 
         if download:
             self.download()
@@ -69,13 +70,13 @@ class PytorchStanfordCars(VisionDataset):
 
         self._samples = [
             (
-                str(self._images_base_path / annotation["fname"]),
+                str(self._images_base_path + '/' +  annotation["fname"]),
                 annotation["class"] - 1,  # Original target mapping  starts from 1, hence -1
             )
             for annotation in sio.loadmat(self._annotations_mat_path, squeeze_me=True)["annotations"]
         ]
 
-        self.classes = sio.loadmat(str(devkit / "cars_meta.mat"), squeeze_me=True)["class_names"].tolist()
+        self.classes = sio.loadmat(str(devkit + "/cars_meta.mat"), squeeze_me=True)["class_names"].tolist()
         self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
 
     def __len__(self) -> int:
@@ -121,11 +122,11 @@ class PytorchStanfordCars(VisionDataset):
             )
 
     def _check_exists(self) -> bool:
-        if not (self._base_folder / "devkit").is_dir():
-            return False
+        # if not (self._base_folder / "devkit").is_dir():
+        #     return False
 
-        return self._annotations_mat_path.exists() and self._images_base_path.is_dir()
-
+        # return self._annotations_mat_path.exists() and self._images_base_path.is_dir()
+        return True
 
 class Cars:
     def __init__(self,
@@ -134,27 +135,34 @@ class Cars:
                  batch_size=32,
                  num_workers=0):
         # Data loading code
-
-        self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=False)
-        self.train_loader = torch.utils.data.DataLoader(
-            self.train_dataset,
-            shuffle=True,
-            batch_size=batch_size,
-            num_workers=num_workers,
+        #/mnt/c/users/mikol/Desktop/informatyka_2021/sem7/gmum_projekt/ViT-merging/data/stanford_cars_by_classes/cars_train
+        self.train_loader, self.train_classes = create_dataloader(
+            location + '/stanford_cars_by_classes/cars_train', batch_size=batch_size, num_workers=num_workers, shuffle=True
         )
+        self.test_loader, self.test_classes = create_dataloader(
+            location + '/stanford_cars_by_classes/cars_test', batch_size=batch_size, num_workers=num_workers, shuffle=False
+        )
+        self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=False)
+        # self.train_loader = torch.utils.data.DataLoader(
+        #     self.train_dataset,
+        #     shuffle=True,
+        #     batch_size=batch_size,
+        #     num_workers=num_workers,
+        # )
 
         self.test_dataset = PytorchStanfordCars(location, 'test', preprocess, download=False)
-        self.test_loader = torch.utils.data.DataLoader(
-            self.test_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers
-        )
+        # self.test_loader = torch.utils.data.DataLoader(
+        #     self.test_dataset,
+        #     batch_size=batch_size,
+        #     num_workers=num_workers
+        # )
         self.test_loader_shuffle = torch.utils.data.DataLoader(
             self.test_dataset,
             shuffle=True,
             batch_size=batch_size,
             num_workers=num_workers
         )
+        
         idx_to_class = dict((v, k) for k, v in self.train_dataset.class_to_idx.items())
         self.classnames = [idx_to_class[i].replace(
             '_', ' ') for i in range(len(idx_to_class))]
