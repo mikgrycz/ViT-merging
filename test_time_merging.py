@@ -152,7 +152,7 @@ if __name__ == "__main__":
         "device": DEVICE,
         "resize": (240, 240),
         "dataset": "cars",
-        "batch_size": 512,
+        "batch_size": 20,
         "arch": "ViT-B-32",
         "scaling_coef": 0.5,
         "lr": 1e-3,
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     transform = transforms.Compose([transforms.ToTensor(), transforms.Resize(config["resize"])])
     cars = Cars(preprocess=transform, location=os.path.join(current_dir, "data"), batch_size=config["batch_size"])
     test_loader = cars.test_loader
-
+    train_loader = cars.train_loader
     pretrained_backbone = torch.load(pretrained_path)
     finetuned_backbone = torch.load(finetuned_path)
 
@@ -188,5 +188,5 @@ if __name__ == "__main__":
     merged = freeze_all_but_last_layers(CombinedModel(merged_backbone, cars_classification_head))
 
     optimizer = torch.optim.Adam(merged.base_model.model.visual.transformer.resblocks[-1].parameters(), lr=config["lr"])
-    p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, 10, 10, DEVICE)
+    p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), train_loader, optimizer, 10, 10, DEVICE)
     torch.save(m.merged_model.state_dict(), os.path.join(current_dir, "checkpoints", "first_try.pth"))

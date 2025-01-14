@@ -5,7 +5,7 @@ from torchvision.datasets import ImageFolder
 from torchvision import transforms
 from collections import defaultdict
 import random
-
+# TODO: multiple classes are put into batch 
 class SingleCategorySampler(Sampler):
     """Sampler to ensure each batch contains images from a single category."""
     def __init__(self, dataset, batch_size):
@@ -23,54 +23,66 @@ class SingleCategorySampler(Sampler):
         self.categories = list(self.category_to_indices.keys())
 
     def __iter__(self):
-        indices = []
+        # Create batches for each category
+        all_batches = []
         for category in self.categories:
             category_indices = self.category_to_indices[category]
-            # Divide into batches
+            # Divide into full batches
             for i in range(0, len(category_indices), self.batch_size):
                 batch = category_indices[i:i + self.batch_size]
-                if len(batch) == self.batch_size:  # Only include full batches
-                    indices.extend(batch)
-        
-        # Shuffle batches
-        random.shuffle(indices)
-        return iter(indices)
+                if len(batch) == self.batch_size:
+                    all_batches.append(batch)
+
+        # Shuffle all batches
+        random.shuffle(all_batches)
+        # Flatten the list of batches into a single list of indices
+        return iter([idx for batch in all_batches for idx in batch])
 
     def __len__(self):
+        # Total number of full batches across all categories
         return sum(len(indices) // self.batch_size for indices in self.category_to_indices.values())
 
 
+
 # Function to create dataloaders
-def create_dataloader(data_dir, batch_size, num_workers=0, shuffle=False):
+def create_dataloader(data_dir, batch_size, num_workers=5):
+    """
+    Create a DataLoader for the given data directory.
+    
+    Args:
+        data_dir (str): Path to the directory containing training or testing data.
+        batch_size (int): Number of samples per batch.
+        num_workers (int): Number of subprocesses to use for data loading.
+    
+    Returns:
+        DataLoader, List[str]: DataLoader and list of class names.
+    """
     transform = transforms.Compose([
         transforms.Resize((240, 240)),
         transforms.ToTensor()
     ])
     dataset = ImageFolder(root=data_dir, transform=transform)
-    
-    if shuffle:
-        sampler = SingleCategorySampler(dataset, batch_size=batch_size)
-        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
-    else:
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    
+    sampler = SingleCategorySampler(dataset, batch_size=batch_size)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
     return dataloader, dataset.classes
 
 
-# Example usage
 if __name__ == "__main__":
-    train_dir = "/path/to/dataset/train"
-    test_dir = "/path/to/dataset/test"
+    # Paths to train and test directories
+    base_dir = "/path/to/stansord_cars"
+    train_dir = os.path.join(base_dir, "cars_train")
+    test_dir = os.path.join(base_dir, "cars_test")
+
     batch_size = 32
     num_workers = 4
 
-    train_loader, train_classes = create_dataloader(train_dir, batch_size, num_workers, shuffle=True)
-    test_loader, test_classes = create_dataloader(test_dir, batch_size, num_workers, shuffle=False)
+    # Create DataLoaders
+    train_loader, train_classes = create_dataloader(train_dir, batch_size, num_workers)
+    test_loader, test_classes = create_dataloader(test_dir, batch_size, num_workers)
 
     print(f"Train classes: {train_classes}")
     print(f"Test classes: {test_classes}")
 
-    # Example iteration
+    # Validate batches
     for images, labels in train_loader:
-        print(f"Batch labels: {labels}")
-        break
+        print(f"Batch labels: {labels.unique()}")

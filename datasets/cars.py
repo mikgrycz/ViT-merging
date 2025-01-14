@@ -52,7 +52,7 @@ class PytorchStanfordCars(VisionDataset):
         super().__init__(root, transform=transform, target_transform=target_transform)
 
         self._split = verify_str_arg(split, "split", ("train", "test"))
-        self._base_folder = "/mnt/c/users/mikol/Desktop/informatyka_2021/sem7/gmum_projekt/ViT-merging/data/stanford_cars_by_classes"
+        self._base_folder = "/mnt/c/users/mikol/Desktop/informatyka_2021/sem7/gmum_projekt/ViT-merging/data/stanford_cars" #_by_classes
         devkit = self._base_folder + "/devkit"
 
         if self._split == "train":
@@ -136,11 +136,11 @@ class Cars:
                  num_workers=0):
         # Data loading code
         #/mnt/c/users/mikol/Desktop/informatyka_2021/sem7/gmum_projekt/ViT-merging/data/stanford_cars_by_classes/cars_train
-        self.train_loader, self.train_classes = create_dataloader(
-            location + '/stanford_cars_by_classes/cars_train', batch_size=batch_size, num_workers=num_workers, shuffle=True
+        self.train_loader, self.train_classes = create_dataloader( # _by_classes removed
+            location + '/stanford_cars/cars_train', batch_size=batch_size, num_workers=num_workers
         )
         self.test_loader, self.test_classes = create_dataloader(
-            location + '/stanford_cars_by_classes/cars_test', batch_size=batch_size, num_workers=num_workers, shuffle=False
+            location + '/stanford_cars/cars_test', batch_size=batch_size, num_workers=num_workers
         )
         self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=False)
         # self.train_loader = torch.utils.data.DataLoader(
