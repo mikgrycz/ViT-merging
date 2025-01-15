@@ -8,6 +8,15 @@ import datasets.cars
 from datasets.cars import Cars
 from src.task_vectors import TaskVector
 import wandb
+from torch.utils.data import DataLoader
+from torchvision import datasets
+
+import timm
+from timm import create_model
+
+import warnings
+warnings.filterwarnings("ignore")
+
 
 class CombinedModel(nn.Module):
     def __init__(self, base_model, classification_head):
@@ -65,7 +74,7 @@ def resolve_gradients(list_grad_loss_p_m, list_grad_loss_f_m):
 
         result_param_list.append(result)
 
-    return result_param_list
+    return torch.Tensor(result_param_list[0])
 
 
 def log_accuracy(iteration, labels, merged_output, finetuned_output, pretrained_output):
@@ -98,6 +107,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
         print(f"Epoch {epoch + 1}/{epochs}")
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_iterations)
         for images, labels in tqdm(dataloader):
+            # print(labels)
             images, labels = images.to(device), labels.to(device)
             for i in range(n_iterations):
                 optimizer.zero_grad()
@@ -125,13 +135,10 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
 
                 optimizer.zero_grad()
                 resolved_gradients = resolve_gradients(p_m_grads, f_m_grads)
-                print(len(resolved_gradients[0]))
-                print("---------")
-                print(len(list(merged_model_last_resblock.parameters())[11]))
                 # for idx, param in enumerate(list(merged_model_last_resblock.parameters())[11]):
                 #     print(idx)
                 #     param.grad = resolved_gradients[idx]
-                list(merged_model_last_resblock.parameters())[11].grad = resolved_gradients[0]
+                list(merged_model_last_resblock.parameters())[11].grad = resolved_gradients
                 optimizer.step()
 
                 log_accuracy(i, labels, merged_output, finetuned_output, pretrained_output)
@@ -152,39 +159,52 @@ if __name__ == "__main__":
 
     config = {
         "device": DEVICE,
-        "resize": (240, 240),
-        "dataset": "cars",
-        "batch_size": 512,
+        "dataset": "Cifar10",
+        "batch_size": 256,
         "arch": "ViT-B-32",
         "scaling_coef": 0.5,
-        "lr": 1e-3,
+        "lr": 1e-2,
         "epochs": 10,
-        "n_iterations": 10
+        "n_iterations": 10,
+        "num_workers": 10,
+        "transforms": {
+            "resize": (240, 240),
+            "to tensor": None,
+            "normalize": {
+                "mean": (0.4914, 0.4822, 0.4465),
+                "std": (0.2023, 0.1994, 0.2010)
+            }
+        }
     }
+    transform_test = transforms.Compose([
+        transforms.Resize(config["transforms"]["resize"]),
+        transforms.ToTensor(),
+        transforms.Normalize(config["transforms"]["normalize"]["mean"], config["transforms"]["normalize"]["std"]),
+    ])
     # TODO: figure out if we can overcome specific resize dims
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Resize(config["resize"])])
-    cars = Cars(preprocess=transform, location="data", batch_size=config["batch_size"])
-    test_loader = cars.test_loader
-
-    pretrained_path = "checkpoints/"+config["arch"]+"/zeroshot.pt"
-    finetuned_path = "checkpoints/"+config["arch"]+"/Cars/finetuned.pt"
-    cars_head_path = "checkpoints/"+config["arch"]+"/head_Cars.pt"
+    # transform = transforms.Compose([transforms.ToTensor(), transforms.Resize(config["resize"])])
+    test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform_test, download=True)
+    test_loader = DataLoader(test_dataset, batch_size=config["batch_size"], shuffle=False,
+                             num_workers=config["num_workers"])
+    pretrained_path = "checkpoints/"+config["arch"]+"/zeroshot_adamerge.pt"
+    finetuned_path = "checkpoints/"+config["arch"]+"/Cifar10/finetuned_adamerge_base_model.pt"
+    cifar10_head_path = "checkpoints/"+config["arch"]+"/head_Cifar.pt"
 
     pretrained_backbone = torch.load(pretrained_path)
     finetuned_backbone = torch.load(finetuned_path)
 
-    wandb.init(entity="illia-dovhalenko-jagiellonian-university", project="pattern", config=config,
-               name=f"Model merging 1 try, arch={config['arch']}, epochs={config['epochs']}, scaling_coef={config['scaling_coef']}")
+    wandb.init(entity="illia-dovhalenko-jagiellonian-university", project="test-time-merging", config=config,
+               name=f"CIFAR10 Model merging arch={config['arch']}, epochs={config['epochs']}, scaling_coef={config['scaling_coef']}, lr={config['lr']}")
 
     task_vector = TaskVector(pretrained_path, finetuned_path)
     merged_backbone = task_vector.apply_to(pretrained_path, scaling_coef=config["scaling_coef"])
 
-    cars_classification_head = torch.load(cars_head_path)
-    pretrained = freeze(CombinedModel(pretrained_backbone, cars_classification_head))
-    finetuned = freeze(CombinedModel(finetuned_backbone, cars_classification_head))
-    merged = freeze_all_but_last_layers(CombinedModel(merged_backbone, cars_classification_head))
+    cifar10_classification_head = torch.load(cifar10_head_path)
+    pretrained = freeze(CombinedModel(pretrained_backbone, cifar10_classification_head))
+    finetuned = freeze(CombinedModel(finetuned_backbone, cifar10_classification_head))
+    merged = freeze_all_but_last_layers(CombinedModel(merged_backbone, cifar10_classification_head))
 
-    optimizer = torch.optim.Adam(merged.base_model.model.visual.transformer.resblocks[-1].parameters(), lr=config["lr"])
+    optimizer = torch.optim.Adam(list(merged.base_model.model.visual.transformer.resblocks[-1].parameters())[11:], lr=config["lr"])
     p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, 10, 10,
                     DEVICE)
     torch.save(m.merged_model.state_dict(), "checkpoints/first_try.pth")
