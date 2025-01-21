@@ -7,9 +7,12 @@ import pathlib
 from typing import Callable, Optional, Any, Tuple
 
 from PIL import Image
+from torch.utils.data import BatchSampler
 
 from torchvision.datasets.utils import download_and_extract_archive, download_url, verify_str_arg
 from torchvision.datasets.vision import VisionDataset
+import numpy as np
+from itertools import combinations
 
 
 class PytorchStanfordCars(VisionDataset):
@@ -127,20 +130,87 @@ class PytorchStanfordCars(VisionDataset):
         return self._annotations_mat_path.exists() and self._images_base_path.is_dir()
 
 
+class OneClassBatchSampler(BatchSampler):
+    def __init__(self, labels, batch_size):
+        self.labels = labels
+        self.batch_size = batch_size
+        self.class_indices = self._group_by_class()
+
+    def _group_by_class(self):
+        class_indices = {}
+        for idx, label in enumerate(self.labels):
+            if label not in class_indices:
+                class_indices[label] = []
+            class_indices[label].append(idx)
+        return class_indices
+
+    def __iter__(self):
+        for class_indices in self.class_indices.values():
+            # Split indices of the same class into batches
+            for i in range(0, len(class_indices), self.batch_size):
+                yield class_indices[i:i + self.batch_size]
+
+    def __len__(self):
+        return sum((len(indices) + self.batch_size - 1) // self.batch_size
+                   for indices in self.class_indices.values())
+
+
+class TwoClassBatchSampler(BatchSampler):
+    def __init__(self, labels, batch_size):
+        self.labels = labels
+        self.batch_size = batch_size
+        self.class_indices = self._group_by_class()
+        self.class_pairs = self._generate_class_pairs()
+
+    def _group_by_class(self):
+        class_indices = {}
+        for idx, label in enumerate(self.labels):
+            if label not in class_indices:
+                class_indices[label] = []
+            class_indices[label].append(idx)
+        return class_indices
+
+    def _generate_class_pairs(self):
+        # Generate all possible pairs of classes
+        return list(combinations(self.class_indices.keys(), 2))
+
+    def __iter__(self):
+        for class1, class2 in self.class_pairs:
+            indices1 = self.class_indices[class1]
+            indices2 = self.class_indices[class2]
+            combined_indices = indices1 + indices2
+            # Shuffle within the pair (optional)
+            np.random.shuffle(combined_indices)
+
+            # Split into batches
+            for i in range(0, len(combined_indices), self.batch_size):
+                yield combined_indices[i:i + self.batch_size]
+
+    def __len__(self):
+        # Approximate number of batches (depends on how the indices split into batches)
+        total_batches = 0
+        for class1, class2 in self.class_pairs:
+            total_items = len(self.class_indices[class1]) + len(self.class_indices[class2])
+            total_batches += (total_items + self.batch_size - 1) // self.batch_size
+        return total_batches
+
+
 class Cars:
     def __init__(self,
                  preprocess,
                  location=os.path.expanduser('~/data'),
                  batch_size=32,
-                 num_workers=0):
+                 num_workers=0,
+                 ):
         # Data loading code
 
         self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=False)
+
         self.train_loader = torch.utils.data.DataLoader(
             self.train_dataset,
+            num_workers=num_workers,
             shuffle=True,
             batch_size=batch_size,
-            num_workers=num_workers,
         )
 
         self.test_dataset = PytorchStanfordCars(location, 'test', preprocess, download=False)
@@ -155,6 +225,22 @@ class Cars:
             batch_size=batch_size,
             num_workers=num_workers
         )
+
+        labels = [l for _, l in self.test_dataset._samples]
+        one_class_batch_sampler = OneClassBatchSampler(labels, batch_size)
+        self.test_loader_one_class_batch = torch.utils.data.DataLoader(
+            self.test_dataset,
+            batch_sampler=one_class_batch_sampler,
+            num_workers=num_workers,
+        )
+
+        two_class_batch_sampler = TwoClassBatchSampler(labels, batch_size)
+        self.test_loader_two_class_batch = torch.utils.data.DataLoader(
+            self.test_dataset,
+            batch_sampler=two_class_batch_sampler,
+            num_workers=num_workers,
+        )
+
         idx_to_class = dict((v, k) for k, v in self.train_dataset.class_to_idx.items())
         self.classnames = [idx_to_class[i].replace(
             '_', ' ') for i in range(len(idx_to_class))]
