@@ -4,7 +4,6 @@ from torch.nn import KLDivLoss
 from torchvision import transforms
 from tqdm import tqdm
 
-import datasets.cars
 from datasets.cars import Cars
 from src.task_vectors import TaskVector
 import wandb
@@ -43,7 +42,7 @@ def resolve_gradients(list_grad_loss_p_m, list_grad_loss_f_m):
         raise ValueError("Lists of tensors must have the same length")
 
     result_param_list = []
-    for t in range(11, len(list_grad_loss_p_m)):
+    for t in range(len(list_grad_loss_p_m)):
         grad_loss_p_m = list_grad_loss_p_m[t]
         grad_loss_f_m = list_grad_loss_f_m[t]
         if grad_loss_p_m.shape != grad_loss_f_m.shape:
@@ -96,7 +95,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
         correct = 0
         total = 0
         print(f"Epoch {epoch + 1}/{epochs}")
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_iterations)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_iterations)
         for images, labels in tqdm(dataloader):
             images, labels = images.to(device), labels.to(device)
             for i in range(n_iterations):
@@ -111,7 +110,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
                 merged_model_last_resblock = model_m.base_model.model.visual.transformer.resblocks[-1]
                 # print(list(merged_model_last_resblock.parameters()))
                 p_m_grads = []
-                for param in merged_model_last_resblock.parameters():
+                for name, param in merged_model_last_resblock.named_parameters():
                     p_m_grads.append(param.grad)
 
                 optimizer.zero_grad()
@@ -120,18 +119,17 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
                 loss_f_m.backward(retain_graph=True)
                 # TODO: hardcoded last layer of Transformer
                 f_m_grads = []
-                for param in merged_model_last_resblock.parameters():
+                for name, param in merged_model_last_resblock.named_parameters():
                     f_m_grads.append(param.grad)
 
                 optimizer.zero_grad()
                 resolved_gradients = resolve_gradients(p_m_grads, f_m_grads)
-                print(len(resolved_gradients[0]))
-                print("---------")
-                print(len(list(merged_model_last_resblock.parameters())[11]))
-                # for idx, param in enumerate(list(merged_model_last_resblock.parameters())[11]):
-                #     print(idx)
-                #     param.grad = resolved_gradients[idx]
-                list(merged_model_last_resblock.parameters())[11].grad = resolved_gradients[0]
+                h = 0
+                for name, param in merged_model_last_resblock.named_parameters():
+                    if h == 11:
+                        param.grad = resolved_gradients[h]
+                    h += 1
+
                 optimizer.step()
 
                 log_accuracy(i, labels, merged_output, finetuned_output, pretrained_output)
@@ -148,7 +146,7 @@ def train(model_p, model_m, model_f, dataloader, optimizer, epochs, n_iterations
 
 
 if __name__ == "__main__":
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.mps.is_available() else "cpu")
 
     config = {
         "device": DEVICE,
@@ -164,7 +162,8 @@ if __name__ == "__main__":
     # TODO: figure out if we can overcome specific resize dims
     transform = transforms.Compose([transforms.ToTensor(), transforms.Resize(config["resize"])])
     cars = Cars(preprocess=transform, location="data", batch_size=config["batch_size"])
-    test_loader = cars.test_loader
+
+    test_loader = cars.test_loader_two_class_batch
 
     pretrained_path = "checkpoints/"+config["arch"]+"/zeroshot.pt"
     finetuned_path = "checkpoints/"+config["arch"]+"/Cars/finetuned.pt"
@@ -173,7 +172,7 @@ if __name__ == "__main__":
     pretrained_backbone = torch.load(pretrained_path)
     finetuned_backbone = torch.load(finetuned_path)
 
-    wandb.init(entity="illia-dovhalenko-jagiellonian-university", project="pattern", config=config,
+    wandb.init(entity="skalka-fil", project="pattern", config=config,
                name=f"Model merging 1 try, arch={config['arch']}, epochs={config['epochs']}, scaling_coef={config['scaling_coef']}")
 
     task_vector = TaskVector(pretrained_path, finetuned_path)
@@ -185,6 +184,6 @@ if __name__ == "__main__":
     merged = freeze_all_but_last_layers(CombinedModel(merged_backbone, cars_classification_head))
 
     optimizer = torch.optim.Adam(merged.base_model.model.visual.transformer.resblocks[-1].parameters(), lr=config["lr"])
-    p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, 10, 10,
+    p, m, f = train(pretrained.to(DEVICE), merged.to(DEVICE), finetuned.to(DEVICE), test_loader, optimizer, config["epochs"], config["n_iterations"],
                     DEVICE)
     torch.save(m.merged_model.state_dict(), "checkpoints/first_try.pth")
