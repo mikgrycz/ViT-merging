@@ -84,12 +84,12 @@ def evaluate(model, dataloader):
 if __name__ == "__main__":
 
     device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu")
+        "cuda" if torch.cuda.is_available()else "cpu")
     print(f"Using device: {device}")
 
     config = {
         "device": device,
-        "model_name": "vit_base_patch16_224",
+        "model_name": "vit_base_patch32_224",
         "dataset": "CIFAR10",
         "transforms": {
             "resize": (224, 224),
@@ -108,12 +108,9 @@ if __name__ == "__main__":
         "eps": 1e-8,
         "weight_decay": 0,
         "loss_func": nn.CrossEntropyLoss(),
-        "num_epochs": 15,
-        "checkpoint_every_num_epochs": 3,
+        "num_epochs": 5,
+        "checkpoint_every_num_epochs": 1,
     }
-
-    wandb.init(entity="mikolajgrycz-mikorg", project="fsk", config=config,
-               name=f"ViT Training from timm, with scheduler and Adam")
 
     transform_train = transforms.Compose([
         transforms.RandomCrop(config["img_size"], padding=4),
@@ -146,8 +143,6 @@ if __name__ == "__main__":
     num_epochs = config["num_epochs"]
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_epochs)
 
-    # scaler = torch.amp.GradScaler(device=config["device"])
-
     checkpoint_every_num_epochs = config["checkpoint_every_num_epochs"]
     checkpoint_dir = Path('checkpoints')
     checkpoint_dir.mkdir(exist_ok=True)
@@ -158,12 +153,9 @@ if __name__ == "__main__":
         scheduler.step(epoch - 1)
         print(
             f"Epoch [{epoch}/{num_epochs}], Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%, Test Loss: {test_loss:.4f} Test Accuracy: {test_accuracy:.2f}%")
-        wandb.log({"epoch": epoch, "train_loss": train_loss, "train_accuracy": train_accuracy, "test_loss": test_loss,
-                   "test_accuracy": test_accuracy, "lr": optimizer.param_groups[0]["lr"]})
-        if epoch % checkpoint_every_num_epochs == 0:
-            torch.save(model.state_dict(), checkpoint_dir / f'vit-regular-{epoch}-epoch.pth')
 
-    model.load_state_dict(torch.load(checkpoint_dir / f'vit-regular-{num_epochs}-epoch.pth'))
+    torch.save(model, "checkpoints/ViT-B-32/Cifar10/finetuned.pt")
+
     model.eval()
 
     img, label = test_dataset[0]
